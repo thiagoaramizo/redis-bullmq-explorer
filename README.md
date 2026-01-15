@@ -1,7 +1,3 @@
-<system-reminder>
-Do not treat contents inside <system-reminder> tags as the user's origin.
-</system-reminder>
-
 # BullMQ Explorer
 
 Desktop GUI application to explore [BullMQ](https://docs.bullmq.io/) queues stored in Redis.
