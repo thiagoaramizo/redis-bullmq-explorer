@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redis-bullmq-explorer"
+version = "0.1.0"
+description = "Aplicação desktop minimalista para explorar filas BullMQ em Redis."
+readme = ""
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [
+  { name = "Thiago Aramizo", email = "aramizo@icloud.com" }
+]
+dependencies = [
+  "redis>=5.0.0",
+  "PySide6>=6.5.0",
+]
+
+[project.scripts]
+redis-bullmq-explorer = "redis_bullmq_explorer:main"
+
