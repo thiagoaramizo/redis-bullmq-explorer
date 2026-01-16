@@ -2,6 +2,8 @@
 
 Desktop GUI application to explore [BullMQ](https://docs.bullmq.io/) queues stored in Redis.
 
+![Main window](redis_bullmq_explorer/assets/Captura de Tela 2026-01-15 às 14.22.02.png)
+
 You can:
 - Connect to any reachable Redis instance.
 - List all BullMQ queues by prefix.
@@ -221,6 +223,8 @@ The application will:
   - Used memory vs total memory
   - Number of connected clients
 
+![Connection screen](redis_bullmq_explorer/assets/Captura de Tela 2026-01-15 às 14.22.24.png)
+
 If the connection fails, you will see an error message dialog.
 
 ---
@@ -264,6 +268,8 @@ Below the jobs table:
   - Total number of jobs
 
 ### 8.4. Auto-refresh and manual refresh
+
+![Jobs table and auto-refresh](redis_bullmq_explorer/assets/Captura de Tela 2026-01-15 às 14.23.33.png)
 
 On the right side of the status cards:
 - A small checkbox: **Auto-refresh (5s)**

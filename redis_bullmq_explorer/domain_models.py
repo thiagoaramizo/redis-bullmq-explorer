@@ -12,4 +12,5 @@ class Job:
     name: str
     state: str
     data_preview: str
+    timestamp: str = ""
 

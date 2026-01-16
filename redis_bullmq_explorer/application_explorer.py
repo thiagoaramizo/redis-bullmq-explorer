@@ -11,6 +11,9 @@ class ExplorerService:
     def connect(self, url: str, prefix: str):
         self.repository.connect(url, prefix)
 
+    def disconnect(self):
+        self.repository.disconnect()
+
     def get_redis_info(self) -> dict[str, str]:
         return self.repository.get_redis_info()
 
@@ -18,8 +21,8 @@ class ExplorerService:
         names = self.repository.get_queues()
         return [Queue(name=n) for n in names]
 
-    def list_jobs(self, queue: Queue, page: int = 1, page_size: int = 20, search_term: str = "", status_filter: str = "") -> tuple[List[Job], int, dict[str, int]]:
-        return self.repository.get_jobs(queue.name, page, page_size, search_term, status_filter)
+    def list_jobs(self, queue: Queue, page: int = 1, page_size: int = 20, search_term: str = "", status_filter: str = "", sort_by: str = "timestamp", descending: bool = True) -> tuple[List[Job], int, dict[str, int]]:
+        return self.repository.get_jobs(queue.name, page, page_size, search_term, status_filter, sort_by, descending)
 
     def delete_job(self, queue: Queue, job_id: str):
         self.repository.delete_job(queue.name, job_id)

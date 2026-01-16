@@ -49,11 +49,18 @@ class StatusCard(QFrame):
         
         self.status_label = QLabel(self.status.upper())
         self.status_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self.status_label.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        # Use system font instead of Segoe UI which might be missing
+        font = QFont()
+        font.setBold(True)
+        font.setPointSize(9)
+        self.status_label.setFont(font)
         
         self.count_label = QLabel(str(self.count))
         self.count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.count_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        font_count = QFont()
+        font_count.setBold(True)
+        font_count.setPointSize(12)
+        self.count_label.setFont(font_count)
         
         layout.addWidget(self.status_label)
         layout.addWidget(self.count_label, 1)
@@ -175,6 +182,8 @@ class MainWindow(QWidget):
         self.service = service
         self.current_queue: Queue | None = None
         self.redis_info_label: QLabel | None = None
+        self.worker = None
+        self._zombie_workers = set()
         
         # Pagination & Search State
         self.current_page = 1
@@ -182,6 +191,8 @@ class MainWindow(QWidget):
         self.total_jobs = 0
         self.current_search = ""
         self.current_status_filter = ""
+        self.current_sort_column = "timestamp"
+        self.current_sort_descending = True
         
         self.status_colors = {
             "wait": Theme.STATUS_WAIT,
@@ -191,11 +202,14 @@ class MainWindow(QWidget):
             "failed": Theme.STATUS_FAILED,
         }
         self.status_cards = {}
+        self.auto_refresh_indicator: QLabel | None = None
+        self.auto_refresh_loading = False
+        self._last_refresh_was_auto = False
         
         # Auto Refresh
         self.auto_refresh_timer = QTimer(self)
-        self.auto_refresh_timer.setInterval(5000)
-        self.auto_refresh_timer.timeout.connect(lambda: self.refresh_jobs(silent=True))
+        self.auto_refresh_timer.setInterval(3000)
+        self.auto_refresh_timer.timeout.connect(lambda: self.refresh_jobs(silent=True, auto=True))
         
         self._build_ui()
 
@@ -326,6 +340,9 @@ class MainWindow(QWidget):
             QSplitter::handle {{
                 background-color: {Theme.SPLITTER_HANDLE};
             }}
+            QCheckBox#AutoRefreshCb {{
+                margin-right: 6px;
+            }}
             """
         )
 
@@ -428,11 +445,29 @@ class MainWindow(QWidget):
             
         self.status_layout.addStretch()
         
-        self.auto_refresh_cb = QCheckBox("Auto-refresh (5s)")
-        self.auto_refresh_cb.setStyleSheet(f"color: {Theme.WINDOW_OFF_TEXT}; font-size: 11px;")
+        self.auto_refresh_cb = QCheckBox()
+        self.auto_refresh_cb.setObjectName("AutoRefreshCb")
         self.auto_refresh_cb.setCursor(Qt.PointingHandCursor)
         self.auto_refresh_cb.stateChanged.connect(self.on_auto_refresh_toggled)
-        self.status_layout.addWidget(self.auto_refresh_cb)
+        
+        self.auto_refresh_indicator = QLabel()
+        self.auto_refresh_indicator.setFixedSize(8, 8)
+        self.auto_refresh_indicator.setStyleSheet(f"background-color: {Theme.WINDOW_OFF_TEXT}; border-radius: 4px;")
+        
+        auto_label = QLabel("Auto-refresh (3s)")
+        auto_label.setStyleSheet(f"color: {Theme.WINDOW_OFF_TEXT}; font-size: 11px;")
+        
+        auto_layout = QHBoxLayout()
+        auto_layout.setContentsMargins(0, 0, 0, 0)
+        auto_layout.setSpacing(6)
+        auto_layout.addWidget(self.auto_refresh_cb)
+        auto_layout.addWidget(self.auto_refresh_indicator)
+        auto_layout.addWidget(auto_label)
+        
+        auto_widget = QWidget()
+        auto_widget.setLayout(auto_layout)
+        
+        self.status_layout.addWidget(auto_widget)
         
         refresh_btn = QPushButton("Refresh")
         refresh_btn.setObjectName("RefreshBtn")
@@ -455,14 +490,17 @@ class MainWindow(QWidget):
 
         # Jobs Table
         self.jobs_table = QTableWidget()
-        self.jobs_table.setColumnCount(5)
-        self.jobs_table.setHorizontalHeaderLabels(["ID", "Name", "State", "Data", "Actions"])
+        self.jobs_table.setColumnCount(6)
+        self.jobs_table.setHorizontalHeaderLabels(["ID", "Name", "State", "Created At", "Data", "Actions"])
         self.jobs_table.verticalHeader().setVisible(False)
         self.jobs_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.jobs_table.setSelectionMode(QTableWidget.SingleSelection)
         self.jobs_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.jobs_table.setShowGrid(False)
         self.jobs_table.setAlternatingRowColors(True)
+        # Disable client-side sorting as we will use server-side
+        self.jobs_table.setSortingEnabled(False)
+        self.jobs_table.horizontalHeader().sectionClicked.connect(self.on_header_clicked)
         self.jobs_table.setStyleSheet(
             f"QTableWidget {{ alternate-background-color: {Theme.ALT_ROW_BG}; }}"
         )
@@ -471,9 +509,10 @@ class MainWindow(QWidget):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents) # ID
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents) # Name
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents) # State
-        header.setSectionResizeMode(3, QHeaderView.Stretch)          # Data
-        header.setSectionResizeMode(4, QHeaderView.Fixed)
-        self.jobs_table.setColumnWidth(4, 140)
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Created At
+        header.setSectionResizeMode(4, QHeaderView.Stretch)          # Data
+        header.setSectionResizeMode(5, QHeaderView.Fixed)
+        self.jobs_table.setColumnWidth(5, 140)
         
         jobs_layout.addWidget(self.jobs_table)
 
@@ -561,10 +600,60 @@ class MainWindow(QWidget):
         prefix = self.prefix_edit.text().strip() or "bull"
         
         self.set_loading(True)
-        self.worker = Worker(self._connect_and_list, url, prefix)
-        self.worker.finished.connect(self.on_connect_finished)
-        self.worker.error.connect(self.on_worker_error)
+        worker = Worker(self._connect_and_list, url, prefix)
+        self._start_worker(worker, self.on_connect_finished)
+
+    def closeEvent(self, event):
+        self.auto_refresh_timer.stop()
+        if self.worker and self.worker.isRunning():
+            self.worker.quit()
+            self.worker.wait()
+        
+        # Cleanup zombies
+        for w in self._zombie_workers:
+            if w.isRunning():
+                w.quit()
+                w.wait()
+        
+        # Close Redis connection
+        self.service.disconnect()
+        
+        super().closeEvent(event)
+
+    def _start_worker(self, worker: Worker, on_finished=None, on_error=None):
+        """Helper to start a worker safely managing previous threads"""
+        # If there's an existing worker running
+        if self.worker and self.worker.isRunning():
+            # Disconnect signals to prevent UI updates from old worker
+            try:
+                self.worker.finished.disconnect()
+                self.worker.error.disconnect()
+            except Exception:
+                pass
+            
+            # Move to zombies to keep reference alive until it finishes
+            old_worker = self.worker
+            self._zombie_workers.add(old_worker)
+            old_worker.finished.connect(lambda: self._cleanup_zombie(old_worker))
+            # Also cleanup on error just in case
+            old_worker.error.connect(lambda: self._cleanup_zombie(old_worker))
+        
+        self.worker = worker
+        if on_finished:
+            self.worker.finished.connect(on_finished)
+        if on_error:
+            self.worker.error.connect(on_error)
+        else:
+            self.worker.error.connect(self.on_worker_error)
+            
         self.worker.start()
+
+    def _cleanup_zombie(self, worker):
+        if worker in self._zombie_workers:
+            self._zombie_workers.remove(worker)
+            # Ensure thread is properly quit
+            worker.quit()
+            worker.wait()
 
     def _connect_and_list(self, url, prefix):
         self.service.connect(url, prefix)
@@ -580,6 +669,8 @@ class MainWindow(QWidget):
 
     def on_worker_error(self, error_msg):
         self.set_loading(False)
+        self._update_auto_refresh_indicator(False)
+        self._last_refresh_was_auto = False
         self.show_error(f"Operation failed: {error_msg}")
 
     def update_queues_list(self, queues):
@@ -621,6 +712,14 @@ class MainWindow(QWidget):
         self.current_status_filter = ""
         self.search_input.setText("")
         
+        self.current_sort_column = "timestamp"
+        self.current_sort_descending = True
+        header = self.jobs_table.horizontalHeader()
+        header.setSortIndicator(3, Qt.DescendingOrder)
+        header.setSortIndicatorShown(True)
+        self._update_auto_refresh_indicator(False)
+        self._last_refresh_was_auto = False
+        
         # Reset cards selection
         for card in self.status_cards.values():
             card.set_selected(False)
@@ -629,29 +728,74 @@ class MainWindow(QWidget):
         self.refresh_jobs()
 
     def on_auto_refresh_toggled(self, state):
-        if state == Qt.Checked:
+        if state == Qt.Checked.value:
             self.auto_refresh_timer.start()
         else:
             self.auto_refresh_timer.stop()
-
-    def refresh_jobs(self, silent: bool = False):
+            self._update_auto_refresh_indicator(False)
+            self._last_refresh_was_auto = False
+    
+    def _update_auto_refresh_indicator(self, active: bool):
+        if self.auto_refresh_indicator is None:
+            return
+        color = Theme.PRIMARY if active else Theme.WINDOW_OFF_TEXT
+        self.auto_refresh_indicator.setStyleSheet(
+            f"background-color: {color}; border-radius: 4px;"
+        )
+            
+    def refresh_jobs(self, silent: bool = False, auto: bool = False):
         if not self.current_queue:
             return
+
+        if self.worker and self.worker.isRunning():
+            if silent:
+                return
             
+        if auto:
+            self._last_refresh_was_auto = True
+            self._update_auto_refresh_indicator(True)
+        
         if not silent:
             self.set_loading(True)
         # Pass pagination params
-        self.worker = Worker(
+        worker = Worker(
             self.service.list_jobs, 
             self.current_queue, 
             page=self.current_page, 
             page_size=self.page_size, 
             search_term=self.current_search,
-            status_filter=self.current_status_filter
+            status_filter=self.current_status_filter,
+            sort_by=self.current_sort_column,
+            descending=self.current_sort_descending
         )
-        self.worker.finished.connect(self.on_jobs_loaded)
-        self.worker.error.connect(self.on_worker_error)
-        self.worker.start()
+        self._start_worker(worker, self.on_jobs_loaded)
+
+    def on_header_clicked(self, logical_index):
+        # 0: ID, 3: Created At
+        new_sort_column = "id"
+        if logical_index == 3:
+            new_sort_column = "timestamp"
+        elif logical_index == 0:
+            new_sort_column = "id"
+        else:
+            # Other columns not supported for server-side sort yet
+            return
+            
+        if self.current_sort_column == new_sort_column:
+            self.current_sort_descending = not self.current_sort_descending
+        else:
+            self.current_sort_column = new_sort_column
+            self.current_sort_descending = True # Default to desc for new column (usually better for time/id)
+            
+        # Update header UI
+        self.jobs_table.horizontalHeader().setSortIndicator(
+            logical_index, 
+            Qt.DescendingOrder if self.current_sort_descending else Qt.AscendingOrder
+        )
+        self.jobs_table.horizontalHeader().setSortIndicatorShown(True)
+        
+        self.current_page = 1
+        self.refresh_jobs()
 
     def on_status_card_clicked(self, status: str):
         if self.current_status_filter == status:
@@ -701,6 +845,9 @@ class MainWindow(QWidget):
                 self.status_cards[status].set_count(count)
         
         self.set_loading(False)
+        if self._last_refresh_was_auto:
+            self._update_auto_refresh_indicator(False)
+            self._last_refresh_was_auto = False
         self.jobs_table.setRowCount(len(jobs))
         for row, job in enumerate(jobs):
             self.jobs_table.setItem(row, 0, QTableWidgetItem(job.id))
@@ -715,7 +862,8 @@ class MainWindow(QWidget):
                 state_item.setForeground(Qt.cyan)
                 
             self.jobs_table.setItem(row, 2, state_item)
-            self.jobs_table.setItem(row, 3, QTableWidgetItem(job.data_preview))
+            self.jobs_table.setItem(row, 3, QTableWidgetItem(job.timestamp))
+            self.jobs_table.setItem(row, 4, QTableWidgetItem(job.data_preview))
             
             container = QWidget()
             layout = QHBoxLayout(container)
@@ -730,7 +878,9 @@ class MainWindow(QWidget):
             delete_btn.clicked.connect(lambda checked=False, r=row: self.on_delete_clicked(r))
             layout.addWidget(view_btn)
             layout.addWidget(delete_btn)
-            self.jobs_table.setCellWidget(row, 4, container)
+            self.jobs_table.setCellWidget(row, 5, container)
+        
+        # self.jobs_table.setSortingEnabled(True) # Removed client-side sort enable
 
         # Update Pagination UI
         total_pages = max(1, ((self.total_jobs - 1) // self.page_size) + 1)
@@ -752,10 +902,8 @@ class MainWindow(QWidget):
         job_name = name_item.text() if name_item else ""
         job_state = state_item.text() if state_item else ""
         self.set_loading(True)
-        self.worker = Worker(self._load_job_detail, self.current_queue, job_id, job_state, job_name)
-        self.worker.finished.connect(self.on_job_detail_loaded)
-        self.worker.error.connect(self.on_worker_error)
-        self.worker.start()
+        worker = Worker(self._load_job_detail, self.current_queue, job_id, job_state, job_name)
+        self._start_worker(worker, self.on_job_detail_loaded)
 
     def _load_job_detail(self, queue, job_id, job_state, job_name):
         detail = self.service.get_job_detail(queue, job_id)
@@ -802,7 +950,7 @@ class MainWindow(QWidget):
             return
             
         self.set_loading(True)
-        self.worker = Worker(
+        worker = Worker(
             self._delete_and_reload, 
             self.current_queue, 
             job_id,
@@ -811,9 +959,7 @@ class MainWindow(QWidget):
             self.current_search,
             self.current_status_filter
         )
-        self.worker.finished.connect(self.on_jobs_loaded)
-        self.worker.error.connect(self.on_worker_error)
-        self.worker.start()
+        self._start_worker(worker, self.on_jobs_loaded)
 
     def _delete_and_reload(self, queue, job_id, page, page_size, search_term, status_filter):
         self.service.delete_job(queue, job_id)

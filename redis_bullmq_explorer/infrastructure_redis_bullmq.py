@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from typing import List
 
 import redis
@@ -15,6 +16,11 @@ class RedisBullMQRepository:
         self.prefix = prefix or "bull"
         self.r = redis.Redis.from_url(url, decode_responses=True)
         self.r.ping()
+
+    def disconnect(self):
+        if self.r:
+            self.r.close()
+            self.r = None
 
     def get_redis_info(self) -> dict[str, str]:
         if self.r is None:
@@ -65,7 +71,7 @@ class RedisBullMQRepository:
             return list(self.r.smembers(key))
         return []
 
-    def get_jobs(self, queue: str, page: int = 1, page_size: int = 20, search_term: str = "", status_filter: str = "") -> tuple[List[Job], int, dict[str, int]]:
+    def get_jobs(self, queue: str, page: int = 1, page_size: int = 20, search_term: str = "", status_filter: str = "", sort_by: str = "timestamp", descending: bool = True) -> tuple[List[Job], int, dict[str, int]]:
         if self.r is None:
             return [], 0, {}
         base = f"{self.prefix}:{queue}"
@@ -90,7 +96,7 @@ class RedisBullMQRepository:
                     jobs_map[jid_str] = set()
                 jobs_map[jid_str].add(state)
 
-        all_ids = sorted(jobs_map.keys(), key=lambda x: int(x) if x.isdigit() else x)
+        all_ids = list(jobs_map.keys())
         
         # 2. Filter (Search & Status)
         filtered_ids = []
@@ -121,12 +127,40 @@ class RedisBullMQRepository:
 
         total_count = len(filtered_ids)
 
-        # 3. Pagination Slice
+        # 3. Sort (Global)
+        if sort_by == "timestamp":
+            # Fetch timestamps for all filtered IDs
+            pipe = self.r.pipeline()
+            for jid in filtered_ids:
+                pipe.hget(f"{base}:{jid}", "timestamp")
+            
+            ts_results = pipe.execute()
+            
+            # Create a list of tuples (id, timestamp_int)
+            ids_with_ts = []
+            for jid, ts_raw in zip(filtered_ids, ts_results):
+                ts_val = 0
+                if ts_raw:
+                    try:
+                        ts_val = int(ts_raw)
+                    except:
+                        pass
+                ids_with_ts.append((jid, ts_val))
+            
+            # Sort by timestamp
+            ids_with_ts.sort(key=lambda x: x[1], reverse=descending)
+            filtered_ids = [x[0] for x in ids_with_ts]
+            
+        else:
+            # Default sort by ID
+            filtered_ids.sort(key=lambda x: int(x) if x.isdigit() else x, reverse=descending)
+
+        # 4. Pagination Slice
         start = (page - 1) * page_size
         end = start + page_size
         page_ids = filtered_ids[start:end]
 
-        # 4. Fetch Details for Page
+        # 5. Fetch Details for Page
         result: List[Job] = []
         if not page_ids:
             return [], total_count, counts
@@ -140,6 +174,16 @@ class RedisBullMQRepository:
         for jid, h in zip(page_ids, job_details):
             name = h.get("name", "")
             data_raw = h.get("data", "")
+            timestamp_raw = h.get("timestamp", "")
+            timestamp_str = "-"
+            
+            if timestamp_raw:
+                try:
+                    ts = int(timestamp_raw) / 1000.0
+                    timestamp_str = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                except Exception:
+                    timestamp_str = str(timestamp_raw)
+
             preview = ""
             if data_raw:
                 try:
@@ -154,6 +198,7 @@ class RedisBullMQRepository:
                     name=name,
                     state=state_str,
                     data_preview=preview,
+                    timestamp=timestamp_str,
                 )
             )
             
