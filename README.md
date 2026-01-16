@@ -2,7 +2,7 @@
 
 Desktop GUI application to explore [BullMQ](https://docs.bullmq.io/) queues stored in Redis.
 
-![Main window](redis_bullmq_explorer/assets/Captura de Tela 2026-01-15 às 14.22.02.png)
+<img width="1427" height="838" alt="Captura de Tela 2026-01-15 às 14 22 24" src="https://github.com/user-attachments/assets/0073223f-a849-4852-adcd-442b2fd63841" />
 
 You can:
 - Connect to any reachable Redis instance.
@@ -14,7 +14,10 @@ You can:
 - See live Redis information (version, mode, memory, clients).
 - Enable auto‑refresh every 5 seconds to keep data up‑to‑date.
 
+<img width="1434" height="835" alt="Captura de Tela 2026-01-15 às 14 22 02" src="https://github.com/user-attachments/assets/9d051ebb-dd9f-4e2b-afda-a302d6e34198" />
+
 The app has a modern dark UI and is fully in English.
+
 
 ---
 
@@ -223,7 +226,7 @@ The application will:
   - Used memory vs total memory
   - Number of connected clients
 
-![Connection screen](redis_bullmq_explorer/assets/Captura de Tela 2026-01-15 às 14.22.24.png)
+<img width="1434" height="835" alt="Captura de Tela 2026-01-15 às 14 22 02" src="https://github.com/user-attachments/assets/e89f687e-7aec-4d37-9154-58ef378d2a79" />
 
 If the connection fails, you will see an error message dialog.
 
