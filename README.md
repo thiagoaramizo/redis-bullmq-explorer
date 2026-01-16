@@ -153,22 +153,10 @@ pip install .
 After installation, still inside the virtual environment, run:
 
 ```bash
-redis-bullmq-explorer
+python run.py
 ```
 
 This will open the BullMQ Explorer desktop window.
-
-If for some reason the command above does not work, you can start the app directly with Python:
-
-```bash
-python -m redis_bullmq_explorer.app
-```
-
-or, on some systems:
-
-```bash
-python3 -m redis_bullmq_explorer.app
-```
 
 ---
 
