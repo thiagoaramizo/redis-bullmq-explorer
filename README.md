@@ -150,7 +150,7 @@ pip install .
 
 ## 6. Starting the application
 
-After installation, still inside the virtual environment, run:
+After installation, still inside the virtual environment, if you use it, in the project folder, run:
 
 ```bash
 python run.py
